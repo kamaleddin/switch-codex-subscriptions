@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'USAGE'
+Usage:
+  cx ACCOUNT [codex args...]
+
+Examples:
+  cx 1
+  cx 2 login
+  cx 2 resume --last
+  cx 3 exec "summarize this repo"
+
+Environment:
+  CODEX_MULTI_ROOT  Override state root. Default: $HOME/.codex-multi-account
+USAGE
+}
+
+if [[ $# -lt 1 ]]; then
+  usage >&2
+  exit 2
+fi
+
+account="$1"
+shift
+
+case "$account" in
+  1|2|3) ;;
+  *)
+    echo "Unsupported account: $account" >&2
+    echo "Expected one of: 1, 2, 3" >&2
+    exit 2
+    ;;
+esac
+
+root="${CODEX_MULTI_ROOT:-$HOME/.codex-multi-account}"
+home="$root/homes/account-$account"
+
+if [[ ! -d "$home" ]]; then
+  echo "Missing Codex account home: $home" >&2
+  echo "Run scripts/setup-multi-codex.sh first." >&2
+  exit 1
+fi
+
+export CODEX_HOME="$home"
+exec codex -c features.goals=true "$@"
