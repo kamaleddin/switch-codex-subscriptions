@@ -66,6 +66,36 @@ Check auth state:
 ./scripts/cx 3 resume --last
 ```
 
+## Install Global Commands
+
+The recommended install is symlinks into `~/.local/bin`, so pulling updates in
+this repo updates the global commands automatically:
+
+```bash
+mkdir -p ~/.local/bin
+
+ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/cx ~/.local/bin/codex-account
+ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/switch-session.sh ~/.local/bin/codex-switch
+ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/status.sh ~/.local/bin/codex-accounts-status
+ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/setup-multi-codex.sh ~/.local/bin/codex-accounts-setup
+```
+
+Make sure `~/.local/bin` is in your shell path:
+
+```bash
+export PATH="$HOME/.local/bin:$PATH"
+```
+
+After that, the tools work from any folder:
+
+```bash
+codex-account 1
+codex-account 2 login status
+codex-switch --from 1 --to 2 --latest
+codex-accounts-status
+codex-accounts-setup
+```
+
 ## Switch A Session
 
 Copy the latest transcript from account 1 to account 2, then launch resume in
@@ -110,6 +140,9 @@ alias codex3='CODEX_HOME=$HOME/.codex-multi-account/homes/account-3 codex -c fea
 alias codex-switch='$HOME/CloudStation/Dev/multiple-codex-accounts/scripts/switch-session.sh'
 alias codex-status='$HOME/CloudStation/Dev/multiple-codex-accounts/scripts/status.sh'
 ```
+
+If you install the global commands above, these aliases are optional. The
+global commands are clearer and less likely to collide with unrelated tools.
 
 ## Operational Rules
 

@@ -42,3 +42,16 @@ Before major Codex upgrades, back up account sessions:
 tar -czf ~/codex-multi-account-backup-$(date +%Y%m%d-%H%M%S).tgz \
   -C ~/.codex-multi-account homes
 ```
+
+## Phase 5: Global Access
+
+Install symlinks into `~/.local/bin` so the tools work from any directory:
+
+```bash
+codex-account
+codex-switch
+codex-accounts-status
+codex-accounts-setup
+```
+
+Status: installed on this machine.
