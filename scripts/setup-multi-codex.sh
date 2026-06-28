@@ -2,89 +2,73 @@
 set -euo pipefail
 
 root="${CODEX_MULTI_ROOT:-$HOME/.codex-multi-account}"
+shared_home="${CODEX_SHARED_HOME:-$HOME/.codex}"
 accounts="${CODEX_MULTI_ACCOUNTS:-3}"
+auth_dir="$root/auth"
 
-ensure_session_dir() {
-  local path="$1"
+mkdir -p "$auth_dir" "$root/homes" "$shared_home"
 
-  if [[ -L "$path" ]]; then
-    local current
-    current="$(readlink "$path")"
-    if [[ "$current" == ../../shared/* ]]; then
-      rm "$path"
-    else
-      echo "Refusing to replace unexpected symlink: $path -> $current" >&2
-      exit 1
-    fi
-  fi
-
-  mkdir -p "$path"
+valid_account() {
+  [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]
 }
 
-ensure_feature_goals() {
-  local config="$1"
-
-  if ! grep -q '^\[features\]' "$config"; then
-    cat >> "$config" <<'TOML'
-
-[features]
-goals = true
-TOML
-    return 0
-  fi
-
-  if ! awk '
-    /^\[features\]$/ { in_features = 1; next }
-    /^\[/ { in_features = 0 }
-    in_features && /^goals[[:space:]]*=/ { found = 1 }
-    END { exit found ? 0 : 1 }
-  ' "$config"; then
-    echo "Warning: $config has [features] but no goals setting; leaving it unchanged." >&2
+account_list() {
+  if [[ "$accounts" =~ ^[0-9]+$ ]]; then
+    seq 1 "$accounts"
+  else
+    printf '%s\n' "$accounts" | tr ', ' '\n\n' | sed '/^$/d'
   fi
 }
 
-mkdir -p "$root/homes"
+copy_auth_if_missing() {
+  local source="$1"
+  local dest="$2"
 
-for account in $(seq 1 "$accounts"); do
+  if [[ -f "$source" && ! -f "$dest" ]]; then
+    cp -p "$source" "$dest"
+    chmod 600 "$dest" 2>/dev/null || true
+  fi
+}
+
+for account in $(account_list); do
+  if ! valid_account "$account"; then
+    echo "Skipping invalid account id from CODEX_MULTI_ACCOUNTS: $account" >&2
+    continue
+  fi
+
   home="$root/homes/account-$account"
-  mkdir -p "$home"
+  slot="$auth_dir/account-$account.json"
 
-  if [[ ! -e "$home/config.toml" ]]; then
-    cat > "$home/config.toml" <<'TOML'
-cli_auth_credentials_store = "file"
-model = "gpt-5.5"
+  mkdir -p "$home/sessions" "$home/archived_sessions"
 
-[features]
-goals = true
-TOML
-  elif ! grep -q '^cli_auth_credentials_store *= *"file"' "$home/config.toml"; then
-    cat >> "$home/config.toml" <<'TOML'
-
-cli_auth_credentials_store = "file"
-TOML
-  fi
-
-  if ! grep -q '^model *=' "$home/config.toml"; then
-    cat >> "$home/config.toml" <<'TOML'
-model = "gpt-5.5"
-TOML
-  fi
-
-  ensure_feature_goals "$home/config.toml"
-  ensure_session_dir "$home/sessions"
-  ensure_session_dir "$home/archived_sessions"
+  copy_auth_if_missing "$home/auth.json" "$slot"
 done
 
+for home in "$root"/homes/account-*; do
+  if [[ ! -d "$home" ]]; then
+    continue
+  fi
+
+  account="$(basename "$home")"
+  account="${account#account-}"
+  if valid_account "$account"; then
+    copy_auth_if_missing "$home/auth.json" "$auth_dir/account-$account.json"
+  fi
+done
+
+copy_auth_if_missing "$shared_home/auth.json" "$auth_dir/account-1.json"
+
 cat <<EOF
-Created multi-account Codex state at:
-  $root
+Configured multi-account Codex auth slots at:
+  $auth_dir
 
-Try:
-  $(pwd)/scripts/cx 1 login status
-  $(pwd)/scripts/switch-session.sh --from 1 --to 2 --latest --copy-only
+Shared Codex home:
+  $shared_home
 
-Optional aliases:
-  alias codex1='CODEX_HOME=$root/homes/account-1 codex -c features.goals=true'
-  alias codex2='CODEX_HOME=$root/homes/account-2 codex -c features.goals=true'
-  alias codex3='CODEX_HOME=$root/homes/account-3 codex -c features.goals=true'
+Use:
+  codex-account 1 login status
+  codex-account 2 resume --last
+  codex-account 3 --model gpt-5.4-mini
+  CODEX_MULTI_ACCOUNTS="1,2,3,work" codex-accounts-setup
+  codex-accounts-status
 EOF

@@ -2,22 +2,42 @@
 set -euo pipefail
 
 root="${CODEX_MULTI_ROOT:-$HOME/.codex-multi-account}"
+shared_home="${CODEX_SHARED_HOME:-$HOME/.codex}"
+auth_dir="$root/auth"
+active_auth="$shared_home/auth.json"
 
-for account in 1 2 3; do
-  home="$root/homes/account-$account"
+found=false
+
+for slot in "$auth_dir"/account-*.json; do
+  if [[ ! -f "$slot" ]]; then
+    continue
+  fi
+
+  found=true
+  account="$(basename "$slot")"
+  account="${account#account-}"
+  account="${account%.json}"
+
+  slot="$auth_dir/account-$account.json"
   echo "== account-$account =="
-  if [[ ! -d "$home" ]]; then
-    echo "missing home: $home"
+
+  if [[ ! -f "$slot" ]]; then
+    echo "No auth slot."
     echo
     continue
   fi
 
-  if output="$(CODEX_HOME="$home" codex login status 2>&1)"; then
-    printf '%s\n' "$output"
-  elif [[ "$output" == *"No such file or directory"* ]]; then
-    echo "Not logged in yet."
+  if [[ -f "$active_auth" ]] && cmp -s "$slot" "$active_auth"; then
+    echo "Auth slot present. Active in $shared_home."
+    CODEX_HOME="$shared_home" codex login status || true
   else
-    printf '%s\n' "$output"
+    echo "Auth slot present. Not currently active."
   fi
+
   echo
 done
+
+if [[ "$found" == false ]]; then
+  echo "No auth slots found at: $auth_dir"
+  echo "Run codex-accounts-setup, or create one with: codex-account 1 login"
+fi

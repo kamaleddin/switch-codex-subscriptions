@@ -8,12 +8,14 @@ Usage:
 
 Examples:
   cx 1
-  cx 2 login
+  cx 2 login status
   cx 2 resume --last
-  cx 3 exec "summarize this repo"
+  cx 3 --model gpt-5.4-mini
+  cx work login
 
 Environment:
-  CODEX_MULTI_ROOT  Override state root. Default: $HOME/.codex-multi-account
+  CODEX_MULTI_ROOT    Override account state root. Default: $HOME/.codex-multi-account
+  CODEX_SHARED_HOME   Override the real Codex home. Default: $HOME/.codex
 USAGE
 }
 
@@ -25,23 +27,113 @@ fi
 account="$1"
 shift
 
-case "$account" in
-  1|2|3) ;;
-  *)
-    echo "Unsupported account: $account" >&2
-    echo "Expected one of: 1, 2, 3" >&2
-    exit 2
-    ;;
-esac
-
-root="${CODEX_MULTI_ROOT:-$HOME/.codex-multi-account}"
-home="$root/homes/account-$account"
-
-if [[ ! -d "$home" ]]; then
-  echo "Missing Codex account home: $home" >&2
-  echo "Run scripts/setup-multi-codex.sh first." >&2
-  exit 1
+if [[ ! "$account" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+  echo "Unsupported account id: $account" >&2
+  echo "Use letters, numbers, dots, underscores, or hyphens. Do not use paths." >&2
+  exit 2
 fi
 
-export CODEX_HOME="$home"
-exec codex -c features.goals=true "$@"
+root="${CODEX_MULTI_ROOT:-$HOME/.codex-multi-account}"
+shared_home="${CODEX_SHARED_HOME:-$HOME/.codex}"
+auth_dir="$root/auth"
+auth_slot="$auth_dir/account-$account.json"
+active_auth="$shared_home/auth.json"
+lock_dir="$root/active.lock"
+backup_dir=""
+
+mkdir -p "$auth_dir" "$shared_home"
+
+ensure_backup_dir() {
+  if [[ -z "$backup_dir" ]]; then
+    backup_dir="$root/backups/runtime-$(date +%Y%m%d-%H%M%S)-$$"
+    mkdir -p "$backup_dir"
+    chmod 700 "$backup_dir" 2>/dev/null || true
+  fi
+}
+
+backup_file() {
+  local source="$1"
+  local label="$2"
+
+  if [[ -f "$source" ]]; then
+    ensure_backup_dir
+    cp -p "$source" "$backup_dir/$label"
+    chmod 600 "$backup_dir/$label" 2>/dev/null || true
+  fi
+}
+
+copy_auth() {
+  local source="$1"
+  local dest="$2"
+  local tmp="$dest.tmp.$$"
+
+  cp -p "$source" "$tmp"
+  chmod 600 "$tmp" 2>/dev/null || true
+  mv "$tmp" "$dest"
+}
+
+acquire_lock() {
+  if mkdir "$lock_dir" 2>/dev/null; then
+    {
+      printf 'pid=%s\n' "$$"
+      printf 'account=%s\n' "$account"
+      printf 'started_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    } > "$lock_dir/info"
+    return 0
+  fi
+
+  local pid=""
+  if [[ -f "$lock_dir/info" ]]; then
+    pid="$(awk -F= '$1 == "pid" { print $2; exit }' "$lock_dir/info" || true)"
+  fi
+
+  if [[ -n "$pid" ]] && ! kill -0 "$pid" 2>/dev/null; then
+    rm -rf "$lock_dir"
+    acquire_lock
+    return 0
+  fi
+
+  echo "Another codex-account session is active." >&2
+  if [[ -f "$lock_dir/info" ]]; then
+    sed -n '1,20p' "$lock_dir/info" >&2
+  fi
+  echo "Exit that session first, or remove stale lock: $lock_dir" >&2
+  exit 1
+}
+
+sync_auth_back() {
+  if [[ -f "$active_auth" ]]; then
+    backup_file "$auth_slot" "account-$account.before-sync.json"
+    copy_auth "$active_auth" "$auth_slot"
+  elif [[ -f "$auth_slot" ]]; then
+    echo "Active auth disappeared; preserving saved account-$account auth slot." >&2
+    copy_auth "$auth_slot" "$active_auth"
+  elif [[ -n "$backup_dir" && -f "$backup_dir/active-before-switch.json" ]]; then
+    echo "No auth was produced for account-$account; restoring previous active auth." >&2
+    copy_auth "$backup_dir/active-before-switch.json" "$active_auth"
+  else
+    echo "No auth exists for account-$account yet. Run: codex-account $account login" >&2
+  fi
+}
+
+cleanup() {
+  local status=$?
+  sync_auth_back || true
+  rm -rf "$lock_dir"
+  exit "$status"
+}
+
+acquire_lock
+trap cleanup EXIT INT TERM
+
+backup_file "$active_auth" "active-before-switch.json"
+backup_file "$auth_slot" "account-$account.before-switch.json"
+
+if [[ -f "$auth_slot" ]]; then
+  copy_auth "$auth_slot" "$active_auth"
+else
+  rm -f "$active_auth"
+fi
+
+export CODEX_HOME="$shared_home"
+codex "$@"

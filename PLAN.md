@@ -1,47 +1,56 @@
 # Plan
 
-## Phase 1: Account Isolation
+## Phase 1: Move To Shared Codex Home
 
-- Keep one `CODEX_HOME` per subscription.
-- Force file-based auth cache in each account home.
-- Use real account-local `sessions/` directories.
+- Use canonical `~/.codex` for sessions, skills, MCP, hooks, plugins, agents,
+  and config.
+- Stop running Codex with per-account `CODEX_HOME` values for normal use.
+- Keep legacy account homes only as transcript import sources.
 
 Status: implemented.
 
-## Phase 2: Session Switching
+## Phase 2: Auth Slot Switching
 
-- Resolve the latest transcript or a specific transcript from a source account.
-- Copy it to the target account, preserving its relative `sessions/` path.
-- Back up a differing destination transcript before overwriting.
-- Launch `codex resume <session-id>` in the target account unless `--copy-only`
-  is passed.
+- Store per-subscription auth files under `~/.codex-multi-account/auth`.
+- Copy the selected slot into `~/.codex/auth.json` before launching Codex.
+- Copy refreshed credentials back to the selected slot on exit.
+- Use a lock to prevent concurrent switches from clobbering auth.
+- Back up active and slot auth before each switch.
 
-Status: implemented in `scripts/switch-session.sh`.
+Status: implemented in `scripts/cx`.
 
-## Phase 3: Verification
+## Phase 3: Shared Capability Repair
 
-Recommended checks:
+- Materialize accidental symlinks in `~/.codex` for skills, hooks, agents, and
+  GSD files.
+- Keep symlink backups with timestamped names.
 
-```bash
-./scripts/status.sh
-./scripts/switch-session.sh --from default --to 2 --latest --copy-only
-./scripts/switch-session.sh --from 1 --to 2 --session <session-id> --copy-only
-```
+Status: implemented in `scripts/repair-codex-home.sh` and run on this machine.
 
-Launch check:
+## Phase 4: Verification
 
-```bash
-./scripts/switch-session.sh --from 1 --to 2 --latest
-```
-
-## Phase 4: Maintenance
-
-Before major Codex upgrades, back up account sessions:
+Checks used:
 
 ```bash
-tar -czf ~/codex-multi-account-backup-$(date +%Y%m%d-%H%M%S).tgz \
-  -C ~/.codex-multi-account homes
+bash -n scripts/cx
+bash -n scripts/status.sh
+bash -n scripts/setup-multi-codex.sh
+bash -n scripts/switch-session.sh
+bash -n scripts/repair-codex-home.sh
+bash -n scripts/backup-auth.sh
+codex-accounts-status
+codex-account 2 login status
+codex-account 3 login status
+codex-account 2 mcp list
+codex-account 1 login status
 ```
+
+Expected result:
+
+- All scripts parse.
+- Accounts 1, 2, and 3 report `Logged in using ChatGPT`.
+- MCP config is visible after switching accounts.
+- Account 1 is restored as active after tests.
 
 ## Phase 5: Global Access
 
@@ -52,6 +61,8 @@ codex-account
 codex-switch
 codex-accounts-status
 codex-accounts-setup
+codex-accounts-backup
+codex-repair-home
 ```
 
-Status: installed on this machine.
+Status: installed/updated on this machine.

@@ -2,96 +2,111 @@
 
 ## Strategy
 
-The architecture uses isolated account homes and explicit transcript copying.
+The architecture uses one shared Codex home and multiple saved auth slots.
 
-Earlier we tested shared `sessions/` symlinks. That works at the filesystem
-level, but it couples every account home to one shared mutable transcript store.
-The copy-on-switch approach is safer:
+This is intentionally different from separate `CODEX_HOME` directories per
+account. Separate homes isolate auth, but they also isolate skills, MCP
+servers, hooks, plugins, agents, config, and sessions. That made account
+switching fragile because a capability installed in one home might not exist in
+another.
 
-- Auth remains isolated.
-- Runtime/config state remains isolated.
-- Session movement is explicit and auditable.
-- A future Codex change to session indexing is less likely to corrupt all
-  accounts at once.
+The shared-home design keeps Codex itself stable:
+
+- `CODEX_HOME` is always `~/.codex`.
+- Codex config and capabilities are loaded from one place.
+- Sessions are shared naturally, so resume does not require transcript copy.
+- Only authentication changes when switching accounts.
 
 ## Components
 
-### Account Homes
+### Shared Codex Home
 
-Each account home is a separate `CODEX_HOME`:
-
-```text
-~/.codex-multi-account/homes/account-N
-```
-
-Each home owns:
+`~/.codex` owns the real Codex runtime state:
 
 - `auth.json`
 - `config.toml`
 - `sessions/`
 - `archived_sessions/`
-- account-local logs/cache/temp state
+- `skills/`
+- `hooks/`
+- `agents/`
+- `plugins/`
+- logs, cache, and other Codex-managed state
 
-### Account Config
+### Auth Slots
 
-Each account config includes:
+Each subscription has one file:
 
-```toml
-cli_auth_credentials_store = "file"
-model = "gpt-5.5"
-
-[features]
-goals = true
+```text
+~/.codex-multi-account/auth/account-<id>.json
 ```
 
-`cli_auth_credentials_store = "file"` keeps accounts from merging through the
-OS keychain. `features.goals = true` keeps this install on the modern Codex
-command surface.
+The active account is whichever slot currently matches:
+
+```text
+~/.codex/auth.json
+```
 
 ### Wrapper
 
-`scripts/cx` runs Codex under a selected account home:
+`scripts/cx` is installed as `codex-account`.
 
-```bash
-./scripts/cx 1
-./scripts/cx 2 login status
-./scripts/cx 3 resume --last
+For `codex-account 2 resume --last`, it:
+
+1. Acquires `~/.codex-multi-account/active.lock`.
+2. Backs up the active auth and selected slot.
+3. Copies `account-2.json` to `~/.codex/auth.json`.
+4. Runs `codex resume --last` with `CODEX_HOME=~/.codex`.
+5. Copies the refreshed `~/.codex/auth.json` back to `account-2.json`.
+6. Releases the lock.
+
+If Codex removes `auth.json`, the wrapper preserves the saved auth slot instead
+of deleting it.
+
+### Setup
+
+`scripts/setup-multi-codex.sh` creates the auth-slot directory and seeds slots
+from legacy account homes when present. It does not overwrite existing slots.
+
+### Status
+
+`scripts/status.sh` discovers all `account-*.json` slots dynamically and shows
+which one is currently active.
+
+### Backup
+
+`scripts/backup-auth.sh` copies active, slot, and legacy auth files into:
+
+```text
+~/.codex-multi-account/backups/auth-YYYYMMDD-HHMMSS/
 ```
 
-### Switch Script
+It prints filenames only, not token contents.
 
-`scripts/switch-session.sh` resolves a transcript from the source account,
-copies it into the target account using the same relative path under
-`sessions/`, then optionally launches:
+### Repair
 
-```bash
-CODEX_HOME=<target-home> codex resume <session-id>
-```
+`scripts/repair-codex-home.sh` materializes important top-level symlinks in
+`~/.codex` into real files/directories. This is useful after experiments that
+linked `skills`, `hooks`, or `agents` to a per-account home.
 
-If the destination transcript already exists and differs, the script backs it
-up before overwriting it.
+### Legacy Transcript Switcher
 
-## Transcript Resolution
+`scripts/switch-session.sh` remains as `codex-switch` for compatibility and
+legacy import:
 
-`--latest` means newest `*.jsonl` by file modification time under the source
-account's `sessions/`.
+- Default source is shared `~/.codex/sessions`.
+- `--from <account>` imports from legacy
+  `~/.codex-multi-account/homes/account-<account>/sessions`.
+- `--copy-only` imports without launching Codex.
+- `--dry-run` is read-only.
 
-`--session <value>` accepts:
-
-- A full path to a transcript file.
-- A transcript filename.
-- A session id substring such as `019ed1f4-3234-70a1-a259-148996cc666a`.
-
-## Supported Account Selectors
-
-- `default` or `0`: `~/.codex`
-- `1`: `~/.codex-multi-account/homes/account-1`
-- `2`: `~/.codex-multi-account/homes/account-2`
-- `3`: `~/.codex-multi-account/homes/account-3`
+Normal resume should use `codex-account <account> resume --last`.
 
 ## Risk Model
 
-This is still based on Codex's local transcript files, but the blast radius is
-smaller than shared symlinks. If a future Codex release changes transcript
-layout, the switch script can be updated without untangling shared mutable
-state across accounts.
+This design depends on Codex continuing to support file-based auth at
+`$CODEX_HOME/auth.json`. It avoids depending on duplicated skills, MCP config,
+plugin caches, or session directories.
+
+Main caveat: only one account-switched Codex session should run at a time,
+because all accounts share one active `~/.codex/auth.json`.

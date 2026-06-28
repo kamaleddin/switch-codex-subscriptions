@@ -1,70 +1,93 @@
 # Multiple Codex Accounts
 
-This folder documents and automates a safer setup for switching between
-multiple OpenAI/Codex subscriptions.
+Switch between multiple ChatGPT/OpenAI subscriptions in Codex CLI while keeping
+Codex capabilities shared.
 
-The current strategy is copy-on-switch:
+The current strategy is auth-slot switching:
 
-- Each subscription has its own isolated `CODEX_HOME`.
-- Each account keeps its own real `sessions/` directory.
-- When switching accounts, a script copies one transcript from the source
-  account to the target account, then launches `codex resume` in the target.
+- One canonical Codex home: `~/.codex`.
+- Shared sessions, skills, MCP servers, hooks, plugins, config, and agents.
+- One saved auth file per subscription under `~/.codex-multi-account/auth`.
+- A wrapper copies the selected auth slot into `~/.codex/auth.json`, runs
+  `codex`, then copies refreshed credentials back to the slot.
 
-This avoids permanently sharing Codex session directories through symlinks.
+This avoids duplicating Codex homes, which is what caused skills/MCP/hooks to
+load inconsistently.
 
 ## Live State
 
-Live Codex state is stored outside this synced workspace:
+Secrets and live Codex state are stored outside this synced repo:
 
 ```text
+~/.codex/
+  auth.json
+  config.toml
+  sessions/
+  skills/
+  hooks/
+  agents/
+  plugins/
+
 ~/.codex-multi-account/
+  auth/
+    account-1.json
+    account-2.json
+    account-3.json
+  backups/
   homes/
-    account-1/
-      auth.json
-      config.toml
-      sessions/
-      archived_sessions/
-    account-2/
-      auth.json
-      config.toml
-      sessions/
-      archived_sessions/
-    account-3/
-      config.toml
-      sessions/
-      archived_sessions/
+    account-1/        # legacy import source only
+    account-2/        # legacy import source only
+    account-3/        # legacy import source only
 ```
 
-`auth.json` files are secrets. They are intentionally kept out of
-`CloudStation/Dev`.
+Treat every `auth.json` and `account-*.json` file as a password.
 
 ## Setup
 
-From this folder:
+From this repo:
 
 ```bash
 ./scripts/setup-multi-codex.sh
-./scripts/cx 1 login
-./scripts/cx 2 login
-./scripts/cx 3 login
 ```
 
-Account 1 has already been seeded from the default `~/.codex/auth.json` on this
-machine. Account 2 has already been authenticated through device login.
-
-Check auth state:
+Check account slots:
 
 ```bash
 ./scripts/status.sh
 ```
 
-## Use An Account
+Create a backup before experiments or upgrades:
 
 ```bash
-./scripts/cx 1
-./scripts/cx 2
-./scripts/cx 3 resume --last
+./scripts/backup-auth.sh
 ```
+
+## Use An Account
+
+Run Codex under a selected account:
+
+```bash
+codex-account 1
+codex-account 2
+codex-account 3
+```
+
+Run a direct Codex subcommand:
+
+```bash
+codex-account 2 login status
+codex-account 3 resume --last
+codex-account 1 mcp list
+```
+
+Because `~/.codex` is shared, normal resume does not need transcript copying:
+
+```bash
+codex-account 2 resume --last
+```
+
+After a switch, plain `codex` uses whichever account is currently active in
+`~/.codex/auth.json`.
 
 ## Install Global Commands
 
@@ -78,6 +101,8 @@ ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/cx ~/.local
 ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/switch-session.sh ~/.local/bin/codex-switch
 ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/status.sh ~/.local/bin/codex-accounts-status
 ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/setup-multi-codex.sh ~/.local/bin/codex-accounts-setup
+ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/backup-auth.sh ~/.local/bin/codex-accounts-backup
+ln -sf /Users/kamal/CloudStation/Dev/multiple-codex-accounts/scripts/repair-codex-home.sh ~/.local/bin/codex-repair-home
 ```
 
 Make sure `~/.local/bin` is in your shell path:
@@ -86,70 +111,47 @@ Make sure `~/.local/bin` is in your shell path:
 export PATH="$HOME/.local/bin:$PATH"
 ```
 
-After that, the tools work from any folder:
+## Legacy Transcript Import
+
+`codex-switch` is no longer needed for normal resume. It exists for importing
+old transcripts from legacy per-account homes and optionally launching resume.
+
+Resume the latest shared transcript under account 2:
 
 ```bash
-codex-account 1
-codex-account 2 login status
-codex-switch --from 1 --to 2 --latest
-codex-accounts-status
-codex-accounts-setup
+codex-switch --to 2 --latest
 ```
 
-## Switch A Session
-
-Copy the latest transcript from account 1 to account 2, then launch resume in
-account 2:
+Import from a legacy account home:
 
 ```bash
-./scripts/switch-session.sh --from 1 --to 2 --latest
+codex-switch --from 1 --to 2 --latest --copy-only
 ```
 
-Copy a specific transcript by session id, then launch it:
+Dry-run without copying or launching:
 
 ```bash
-./scripts/switch-session.sh --from 1 --to 2 --session 019ed1f4-3234-70a1-a259-148996cc666a
+codex-switch --to 2 --latest --dry-run
 ```
 
-Copy only, without launching Codex:
+## Add More Accounts
+
+Numeric and named account ids are supported:
 
 ```bash
-./scripts/switch-session.sh --from 1 --to 2 --latest --copy-only
+CODEX_MULTI_ACCOUNTS="1,2,3,work" codex-accounts-setup
+codex-account work login
+codex-account work login status
 ```
 
-Use the default `~/.codex` profile as a source:
-
-```bash
-./scripts/switch-session.sh --from default --to 2 --latest
-```
-
-Pass extra arguments to `codex resume` after `--`:
-
-```bash
-./scripts/switch-session.sh --from 1 --to 2 --latest -- --model gpt-5.5
-```
-
-## Shell Aliases
-
-Optional `~/.zshrc` aliases:
-
-```zsh
-alias codex1='CODEX_HOME=$HOME/.codex-multi-account/homes/account-1 codex -c features.goals=true'
-alias codex2='CODEX_HOME=$HOME/.codex-multi-account/homes/account-2 codex -c features.goals=true'
-alias codex3='CODEX_HOME=$HOME/.codex-multi-account/homes/account-3 codex -c features.goals=true'
-alias codex-switch='$HOME/CloudStation/Dev/multiple-codex-accounts/scripts/switch-session.sh'
-alias codex-status='$HOME/CloudStation/Dev/multiple-codex-accounts/scripts/status.sh'
-```
-
-If you install the global commands above, these aliases are optional. The
-global commands are clearer and less likely to collide with unrelated tools.
+Account ids may contain letters, numbers, dots, underscores, and hyphens.
 
 ## Operational Rules
 
-- Treat every `auth.json` as a password.
-- Do not copy a transcript into a target account while that same session is
-  already open in another terminal.
-- Prefer `--session <id>` for important work so you know exactly what is being
-  copied.
-- If Codex upgrades change the session file layout, this copy-on-switch script
-  is easier to repair than permanent shared-session symlinks.
+- Back up auth before changing login state: `codex-accounts-backup`.
+- Do not run two different `codex-account` sessions concurrently. The wrapper
+  uses a lock because all accounts share one active `~/.codex/auth.json`.
+- Use plain `codex resume --last` only when the currently active account is the
+  one you intend to use.
+- Use `codex-account <account> resume --last` when switching and resuming in
+  one command.
